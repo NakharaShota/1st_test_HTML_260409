@@ -14,7 +14,7 @@
         .chart-container { overflow-x: auto; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 10px; margin-bottom: 15px; -webkit-overflow-scrolling: touch; }
         .chart-wrapper { position: relative; }
         .chart-row { display: flex; align-items: center; border-bottom: 1px solid var(--chart-line); height: 35px; }
-        .chart-label { width: 90px; font-size: 0.65rem; font-weight: bold; position: sticky; left: 0; background: #fff; z-index: 10; border-right: 1px solid #ddd; }
+        .chart-label { width: 130px; font-size: 0.65rem; font-weight: bold; position: sticky; left: 0; background: #fff; z-index: 10; border-right: 1px solid #ddd; padding-right: 4px; }
         .chart-timeline { flex-grow: 1; position: relative; height: 100%; }
         .chart-marker { position: absolute; width: 10px; height: 10px; background: var(--primary); border-radius: 50%; top: 50%; transform: translate(-50%, -50%); border: 1.5px solid #fff; }
 
@@ -41,6 +41,13 @@
         .log-item { border-bottom: 1px solid #eee; padding: 10px 0; }
         .log-date { font-weight: bold; color: var(--primary); font-size: 0.9rem; }
         .log-memo { font-size: 0.8rem; background: #fff9db; padding: 5px; border-radius: 4px; margin-top: 4px; border: 1px solid #ffec99; }
+        .log-actions { margin-top: 8px; display: flex; gap: 8px; }
+        .inline-btn { width: auto; padding: 6px 10px; font-size: 0.75rem; margin-bottom: 0; }
+        .btn-danger { background: var(--accent); }
+        .stat-item { border-bottom: 1px solid #e5e7eb; padding: 8px 0; }
+        .stat-item:last-child { border-bottom: none; }
+        .stat-title { font-weight: bold; font-size: 0.9rem; margin-bottom: 4px; }
+        .stat-meta { font-size: 0.8rem; color: #495057; }
     </style>
 </head>
 <body>
@@ -71,7 +78,8 @@
             <textarea id="memo" maxlength="100" placeholder="例：気温高め、ヒンジ清掃予定など"></textarea>
         </div>
         
-        <button onclick="saveLog()">保存</button>
+        <button id="saveBtn" onclick="saveLog()">保存</button>
+        <button id="cancelEditBtn" class="btn-small" onclick="cancelEdit()" style="display:none; background:#495057;">編集キャンセル</button>
     </div>
 
     <div style="display:flex; gap:10px; margin-bottom: 20px;">
@@ -82,12 +90,47 @@
     <h2>📜 直近の履歴</h2>
     <div id="logList"></div>
 
+    <h2>📊 メンテナンス統計</h2>
+    <div id="statsList" class="card"></div>
+
     <script>
         document.getElementById('date').valueAsDate = new Date();
+        let editingIndex = null;
         const config = {
             items: ["シャンプー", "水垢除去", "鉄粉除去", "ホイール清掃", "タイヤワックス", "ガラス撥水", "ガラス鱗取り", "隙間清掃", "車内清掃", "プロ施工"],
             chemicalTargets: ["シャンプー", "水垢除去", "鉄粉除去", "撥水コート", "ガラス撥水"]
         };
+
+        function getHistory() {
+            return JSON.parse(localStorage.getItem('carWashLogs') || '[]');
+        }
+
+        function setHistory(history) {
+            history.sort((a, b) => new Date(b.date) - new Date(a.date));
+            localStorage.setItem('carWashLogs', JSON.stringify(history));
+        }
+
+        function resetForm() {
+            document.getElementById('date').valueAsDate = new Date();
+            document.getElementById('location').value = '';
+            document.getElementById('memo').value = '';
+            document.querySelectorAll('input[type="checkbox"]').forEach(el => { el.checked = false; });
+            config.chemicalTargets.forEach(item => {
+                const input = document.getElementById(`input-chem-${item}`);
+                if (input) input.value = '';
+                toggleChem(item);
+            });
+            editingIndex = null;
+            document.getElementById('saveBtn').textContent = '保存';
+            document.getElementById('cancelEditBtn').style.display = 'none';
+        }
+
+        function refreshAll() {
+            updateChips();
+            renderChart();
+            renderLogs();
+            renderStats();
+        }
 
         // フォーム生成
         function initForm() {
@@ -151,6 +194,7 @@
             });
 
             if (menus.length === 0) return alert("内容を選択してください");
+            if (!document.getElementById('date').value) return alert("日付を入力してください");
 
             const log = {
                 date: document.getElementById('date').value,
@@ -159,19 +203,26 @@
                 memo: document.getElementById('memo').value
             };
 
-            let history = JSON.parse(localStorage.getItem('carWashLogs') || '[]');
-            history.unshift(log);
-            history.sort((a, b) => new Date(b.date) - new Date(a.date));
-            localStorage.setItem('carWashLogs', JSON.stringify(history));
+            const history = getHistory();
+            if (editingIndex === null) {
+                history.unshift(log);
+            } else {
+                history[editingIndex] = log;
+            }
+            setHistory(history);
 
-            alert("保存しました");
-            location.reload(); // 簡易リフレッシュ
+            alert(editingIndex === null ? "保存しました" : "更新しました");
+            resetForm();
+            refreshAll();
         }
 
         function renderChart() {
-            const history = JSON.parse(localStorage.getItem('carWashLogs') || '[]');
+            const history = getHistory();
             const chartWrapper = document.getElementById('timelineChart');
-            if (history.length === 0) return;
+            if (history.length === 0) {
+                chartWrapper.innerHTML = '<div style="padding:8px; color:#666; font-size:0.85rem;">記録がありません</div>';
+                return;
+            }
 
             const dates = history.map(h => new Date(h.date));
             const minDate = new Date(Math.min(...dates));
@@ -182,27 +233,137 @@
             chartWrapper.style.width = (timelineWidth + 100) + 'px';
 
             let html = '';
+            // メンテナンス項目ごとの行
             config.items.forEach(item => {
-                html += `<div class="chart-row"><div class="chart-label">${item}</div><div class="chart-timeline" style="width:${timelineWidth}px;">`;
-                history.filter(log => log.details.some(d => d.name === item)).forEach(log => {
+                const itemLogs = history.filter(log => log.details.some(d => d.name === item));
+                html += `<div class="chart-row"><div class="chart-label">${item} (${itemLogs.length}回)</div><div class="chart-timeline" style="width:${timelineWidth}px;">`;
+                itemLogs.forEach(log => {
                     const pos = (new Date(log.date) - startDate) / (1000 * 60 * 60 * 24) * dayWidth;
                     html += `<div class="chart-marker" style="left:${pos}px;"></div>`;
                 });
                 html += `</div></div>`;
             });
+
+            // 横軸日付ラベル行
+            html += `<div class="chart-row" style="height:22px; background:#f8f9fa; border-bottom:none;">`;
+            html += `<div class="chart-label" style="background:#f8f9fa; border-right:1px solid #ddd;"></div>`;
+            html += `<div class="chart-timeline" style="width:${timelineWidth}px; position:relative;">`;
+            // 日付ラベルを7日ごとに表示
+            for (let i = 0; i < totalDays; i += 7) {
+                const date = new Date(startDate.getTime());
+                date.setDate(date.getDate() + i);
+                const label = `${date.getMonth() + 1}/${date.getDate()}`;
+                html += `<span style="position:absolute; left:${i * dayWidth}px; font-size:0.7rem; color:#888; white-space:nowrap;">${label}</span>`;
+            }
+            html += `</div></div>`;
+
             chartWrapper.innerHTML = html;
             setTimeout(() => { document.getElementById('chartContainer').scrollLeft = 99999; }, 200);
         }
 
         function renderLogs() {
-            const history = JSON.parse(localStorage.getItem('carWashLogs') || '[]');
-            document.getElementById('logList').innerHTML = history.slice(0, 10).map(item => `
+            const history = getHistory();
+            if (history.length === 0) {
+                document.getElementById('logList').innerHTML = '<div class="card" style="font-size:0.85rem; color:#666;">履歴がありません</div>';
+                return;
+            }
+
+            document.getElementById('logList').innerHTML = history.map((item, index) => `
                 <div class="log-item">
                     <span class="log-date">${item.date}</span> @${item.location}<br>
                     <small style="color:#444;">${item.details.map(d => d.name + (d.chem ? `(${d.chem})` : "")).join(' / ')}</small>
                     ${item.memo ? `<div class="log-memo">📝 ${item.memo}</div>` : ''}
+                    <div class="log-actions">
+                        <button class="inline-btn" onclick="startEditLog(${index})">修正</button>
+                        <button class="inline-btn btn-danger" onclick="deleteLog(${index})">削除</button>
+                    </div>
                 </div>
             `).join('');
+        }
+
+        function renderStats() {
+            const history = getHistory();
+            const statsList = document.getElementById('statsList');
+            const now = new Date();
+
+            if (history.length === 0) {
+                statsList.innerHTML = '<div style="font-size:0.85rem; color:#666;">記録がありません</div>';
+                return;
+            }
+
+            statsList.innerHTML = config.items.map(item => {
+                const itemDates = history
+                    .filter(log => log.details.some(d => d.name === item))
+                    .map(log => new Date(log.date))
+                    .sort((a, b) => a - b);
+
+                const count = itemDates.length;
+                const avgIntervalText = count >= 2
+                    ? `${(itemDates.slice(1).reduce((sum, date, i) => sum + ((date - itemDates[i]) / (1000 * 60 * 60 * 24)), 0) / (count - 1)).toFixed(1)}日おき`
+                    : '記録2回以上で表示';
+
+                const elapsedWeeksText = count >= 1
+                    ? `${((now - itemDates[count - 1]) / (1000 * 60 * 60 * 24 * 7)).toFixed(1)}週間経過`
+                    : '未実施';
+
+                return `
+                    <div class="stat-item">
+                        <div class="stat-title">${item}</div>
+                        <div class="stat-meta">累計 ${count}回 / 平均 ${avgIntervalText} / ${elapsedWeeksText}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function startEditLog(index) {
+            const history = getHistory();
+            const target = history[index];
+            if (!target) return;
+
+            editingIndex = index;
+            document.getElementById('date').value = target.date;
+            document.getElementById('location').value = target.location;
+            document.getElementById('memo').value = target.memo || '';
+
+            document.querySelectorAll('input[type="checkbox"]').forEach(el => { el.checked = false; });
+            config.chemicalTargets.forEach(item => {
+                const input = document.getElementById(`input-chem-${item}`);
+                if (input) input.value = '';
+                toggleChem(item);
+            });
+
+            target.details.forEach(detail => {
+                const check = document.getElementById(`check-${detail.name}`);
+                if (check) {
+                    check.checked = true;
+                    toggleChem(detail.name);
+                }
+                const chemInput = document.getElementById(`input-chem-${detail.name}`);
+                if (chemInput) chemInput.value = detail.chem || '';
+            });
+
+            document.getElementById('saveBtn').textContent = '更新保存';
+            document.getElementById('cancelEditBtn').style.display = 'inline-block';
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function cancelEdit() {
+            resetForm();
+        }
+
+        function deleteLog(index) {
+            if (!confirm('この履歴を削除しますか？')) return;
+            const history = getHistory();
+            history.splice(index, 1);
+            setHistory(history);
+
+            if (editingIndex === index) {
+                resetForm();
+            } else if (editingIndex !== null && index < editingIndex) {
+                editingIndex -= 1;
+            }
+
+            refreshAll();
         }
 
         function exportData() {
@@ -220,7 +381,8 @@
                 const reader = new FileReader();
                 reader.onload = event => {
                     localStorage.setItem('carWashLogs', event.target.result);
-                    location.reload();
+                    resetForm();
+                    refreshAll();
                 };
                 reader.readAsText(e.target.files[0]);
             };
@@ -228,8 +390,7 @@
         }
 
         initForm();
-        renderChart();
-        renderLogs();
+        refreshAll();
     </script>
 </body>
 </html>
