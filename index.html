@@ -134,7 +134,7 @@
                 
                 // 過去に使用したケミカルのリスト
                 const pastChems = [...new Set(history.flatMap(log => 
-                    log.details ? log.details.filter(d => d.name <http://d.name>  === item).map(d => d.chem) : []
+                    log.details ? log.details.filter(d => d.name === item).map(d => d.chem) : []
                 ))].filter(Boolean).slice(0, 5);
 
                 chipsContainer.innerHTML = pastChems.map(c => `
@@ -184,7 +184,7 @@
             let html = '';
             config.items.forEach(item => {
                 html += `<div class="chart-row"><div class="chart-label">${item}</div><div class="chart-timeline" style="width:${timelineWidth}px;">`;
-                history.filter(log => log.details.some(d => d.name <http://d.name>  === item)).forEach(log => {
+                history.filter(log => log.details.some(d => d.name === item)).forEach(log => {
                     const pos = (new Date(log.date) - startDate) / (1000 * 60 * 60 * 24) * dayWidth;
                     html += `<div class="chart-marker" style="left:${pos}px;"></div>`;
                 });
@@ -199,7 +199,7 @@
             document.getElementById('logList').innerHTML = history.slice(0, 10).map(item => `
                 <div class="log-item">
                     <span class="log-date">${item.date}</span> @${item.location}<br>
-                    <small style="color:#444;">${item.details.map(d => d.name <http://d.name>  + (d.chem ? `(${d.chem})` : "")).join(' / ')}</small>
+                    <small style="color:#444;">${item.details.map(d => d.name + (d.chem ? `(${d.chem})` : "")).join(' / ')}</small>
                     ${item.memo ? `<div class="log-memo">📝 ${item.memo}</div>` : ''}
                 </div>
             `).join('');
@@ -233,4 +233,3 @@
     </script>
 </body>
 </html>
-
