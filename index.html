@@ -11,12 +11,14 @@
         .card { background: var(--bg); padding: 12px; border-radius: 10px; border: 1px solid #dee2e6; margin-bottom: 15px; }
         
         /* グラフエリア */
-        .chart-container { overflow-x: auto; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 10px; margin-bottom: 15px; -webkit-overflow-scrolling: touch; }
+        .chart-container { overflow-x: auto; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 10px; margin-bottom: 15px; -webkit-overflow-scrolling: touch; touch-action: pan-x; }
         .chart-wrapper { position: relative; }
         .chart-row { display: flex; align-items: center; border-bottom: 1px solid var(--chart-line); height: 35px; }
         .chart-label { width: 130px; font-size: 0.65rem; font-weight: bold; position: sticky; left: 0; background: #fff; z-index: 10; border-right: 1px solid #ddd; padding-right: 4px; }
         .chart-timeline { flex-grow: 1; position: relative; height: 100%; }
         .chart-marker { position: absolute; width: 10px; height: 10px; background: var(--primary); border-radius: 50%; top: 50%; transform: translate(-50%, -50%); border: 1.5px solid #fff; }
+        .chart-axis-label { position:absolute; font-size:0.7rem; color:#888; white-space:nowrap; transform:translateX(-50%); }
+        .chart-axis-tick { position:absolute; top:0; bottom:10px; width:1px; background:#e9ecef; }
 
         /* 入力フォーム */
         .input-group { margin-bottom: 12px; }
@@ -82,6 +84,9 @@
         <button id="cancelEditBtn" class="btn-small" onclick="cancelEdit()" style="display:none; background:#495057;">編集キャンセル</button>
     </div>
 
+    <h2>📊 メンテナンス統計</h2>
+    <div id="statsList" class="card"></div>
+
     <div style="display:flex; gap:10px; margin-bottom: 20px;">
         <button class="btn-small" onclick="exportData()">データ保存</button>
         <button class="btn-small" onclick="importData()" style="background:#495057;">データ復元</button>
@@ -90,16 +95,40 @@
     <h2>📜 直近の履歴</h2>
     <div id="logList"></div>
 
-    <h2>📊 メンテナンス統計</h2>
-    <div id="statsList" class="card"></div>
-
     <script>
         document.getElementById('date').valueAsDate = new Date();
         let editingIndex = null;
+        let chartZoom = 1;
+        const chartZoomLimit = { min: 0.6, max: 4 };
+        const pinchState = { active: false, startDistance: 0, startZoom: 1, centerX: 0, centerRatio: 1 };
         const config = {
             items: ["シャンプー", "水垢除去", "鉄粉除去", "ホイール清掃", "タイヤワックス", "ガラス撥水", "ガラス鱗取り", "隙間清掃", "車内清掃", "プロ施工"],
             chemicalTargets: ["シャンプー", "水垢除去", "鉄粉除去", "撥水コート", "ガラス撥水"]
         };
+
+        function clamp(value, min, max) {
+            return Math.min(max, Math.max(min, value));
+        }
+
+        function getTouchDistance(t1, t2) {
+            const dx = t1.clientX - t2.clientX;
+            const dy = t1.clientY - t2.clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        function getTickStepDays(dayWidth) {
+            const candidates = [1, 2, 3, 5, 7, 10, 14, 21, 30, 60, 90];
+            return candidates.find(step => step * dayWidth >= 56) || 120;
+        }
+
+        function formatAxisLabel(date, stepDays) {
+            const m = date.getMonth() + 1;
+            const d = date.getDate();
+            if (stepDays >= 60 || (m === 1 && d <= 7)) {
+                return `${date.getFullYear()}/${m}/${d}`;
+            }
+            return `${m}/${d}`;
+        }
 
         function getHistory() {
             return JSON.parse(localStorage.getItem('carWashLogs') || '[]');
@@ -130,6 +159,45 @@
             renderChart();
             renderLogs();
             renderStats();
+        }
+
+        function setupChartGestures() {
+            const container = document.getElementById('chartContainer');
+            if (!container || container.dataset.gestureBound === '1') return;
+
+            container.addEventListener('touchstart', (e) => {
+                if (e.touches.length !== 2) return;
+                e.preventDefault();
+                pinchState.active = true;
+                pinchState.startDistance = getTouchDistance(e.touches[0], e.touches[1]);
+                pinchState.startZoom = chartZoom;
+
+                const rect = container.getBoundingClientRect();
+                pinchState.centerX = ((e.touches[0].clientX + e.touches[1].clientX) / 2) - rect.left;
+                const currentWidth = Math.max(1, container.scrollWidth);
+                pinchState.centerRatio = (container.scrollLeft + pinchState.centerX) / currentWidth;
+            }, { passive: false });
+
+            container.addEventListener('touchmove', (e) => {
+                if (!pinchState.active || e.touches.length !== 2) return;
+                e.preventDefault();
+
+                const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
+                if (pinchState.startDistance <= 0) return;
+
+                chartZoom = clamp(pinchState.startZoom * (currentDistance / pinchState.startDistance), chartZoomLimit.min, chartZoomLimit.max);
+                renderChart({ keepPoint: { ratio: pinchState.centerRatio, centerX: pinchState.centerX } });
+            }, { passive: false });
+
+            container.addEventListener('touchend', () => {
+                if (pinchState.active) pinchState.active = false;
+            });
+
+            container.addEventListener('touchcancel', () => {
+                if (pinchState.active) pinchState.active = false;
+            });
+
+            container.dataset.gestureBound = '1';
         }
 
         // フォーム生成
@@ -216,9 +284,10 @@
             refreshAll();
         }
 
-        function renderChart() {
+        function renderChart(option = {}) {
             const history = getHistory();
             const chartWrapper = document.getElementById('timelineChart');
+            const chartContainer = document.getElementById('chartContainer');
             if (history.length === 0) {
                 chartWrapper.innerHTML = '<div style="padding:8px; color:#666; font-size:0.85rem;">記録がありません</div>';
                 return;
@@ -228,9 +297,12 @@
             const minDate = new Date(Math.min(...dates));
             const startDate = new Date(minDate); startDate.setDate(startDate.getDate() - 7);
             const totalDays = Math.ceil((new Date() - startDate) / (1000 * 60 * 60 * 24)) + 1;
-            const dayWidth = totalDays > 365 ? 4 : 8;
+            const viewportWidth = Math.max(240, chartContainer.clientWidth - 160);
+            const baseDayWidth = viewportWidth / 60; // デフォルトで約2か月を表示
+            const dayWidth = clamp(baseDayWidth * chartZoom, 2, 28);
             const timelineWidth = totalDays * dayWidth;
             chartWrapper.style.width = (timelineWidth + 100) + 'px';
+            const tickStepDays = getTickStepDays(dayWidth);
 
             let html = '';
             // メンテナンス項目ごとの行
@@ -248,17 +320,24 @@
             html += `<div class="chart-row" style="height:22px; background:#f8f9fa; border-bottom:none;">`;
             html += `<div class="chart-label" style="background:#f8f9fa; border-right:1px solid #ddd;"></div>`;
             html += `<div class="chart-timeline" style="width:${timelineWidth}px; position:relative;">`;
-            // 日付ラベルを7日ごとに表示
-            for (let i = 0; i < totalDays; i += 7) {
+            // ズーム量に応じて目盛り間隔を調整
+            for (let i = 0; i < totalDays; i += tickStepDays) {
                 const date = new Date(startDate.getTime());
                 date.setDate(date.getDate() + i);
-                const label = `${date.getMonth() + 1}/${date.getDate()}`;
-                html += `<span style="position:absolute; left:${i * dayWidth}px; font-size:0.7rem; color:#888; white-space:nowrap;">${label}</span>`;
+                const label = formatAxisLabel(date, tickStepDays);
+                const left = i * dayWidth;
+                html += `<span class="chart-axis-tick" style="left:${left}px;"></span>`;
+                html += `<span class="chart-axis-label" style="left:${left}px;">${label}</span>`;
             }
             html += `</div></div>`;
 
             chartWrapper.innerHTML = html;
-            setTimeout(() => { document.getElementById('chartContainer').scrollLeft = 99999; }, 200);
+            if (option.keepPoint) {
+                const nextLeft = (option.keepPoint.ratio * chartContainer.scrollWidth) - option.keepPoint.centerX;
+                chartContainer.scrollLeft = Math.max(0, nextLeft);
+            } else {
+                chartContainer.scrollLeft = chartContainer.scrollWidth;
+            }
         }
 
         function renderLogs() {
@@ -291,11 +370,15 @@
                 return;
             }
 
-            statsList.innerHTML = config.items.map(item => {
+            const itemStatsHtml = config.items.map(item => {
                 const itemDates = history
                     .filter(log => log.details.some(d => d.name === item))
                     .map(log => new Date(log.date))
                     .sort((a, b) => a - b);
+
+                const chemCount = history.reduce((count, log) => {
+                    return count + log.details.filter(d => d.name === item && d.chem && d.chem.trim()).length;
+                }, 0);
 
                 const count = itemDates.length;
                 const avgIntervalText = count >= 2
@@ -309,10 +392,48 @@
                 return `
                     <div class="stat-item">
                         <div class="stat-title">${item}</div>
-                        <div class="stat-meta">累計 ${count}回 / 平均 ${avgIntervalText} / ${elapsedWeeksText}</div>
+                        <div class="stat-meta">累計 ${count}回 / 平均 ${avgIntervalText} / ${elapsedWeeksText} / ケミカル入力 ${chemCount}回</div>
                     </div>
                 `;
             }).join('');
+
+            const shampooChemCounts = {};
+            const allChemCounts = {};
+            history.forEach(log => {
+                log.details.forEach(detail => {
+                    const chem = (detail.chem || '').trim();
+                    if (!chem) return;
+                    allChemCounts[chem] = (allChemCounts[chem] || 0) + 1;
+                    if (detail.name === 'シャンプー') {
+                        shampooChemCounts[chem] = (shampooChemCounts[chem] || 0) + 1;
+                    }
+                });
+            });
+
+            const topShampooChems = Object.entries(shampooChemCounts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 3)
+                .map(([name, count]) => `${name} ${count}回`)
+                .join(' / ') || '入力なし';
+
+            const topAllChems = Object.entries(allChemCounts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5)
+                .map(([name, count]) => `${name} ${count}回`)
+                .join(' / ') || '入力なし';
+
+            const extraStatsHtml = `
+                <div class="stat-item">
+                    <div class="stat-title">シャンプー ケミカル内訳</div>
+                    <div class="stat-meta">${topShampooChems}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-title">ケミカル使用 TOP5</div>
+                    <div class="stat-meta">${topAllChems}</div>
+                </div>
+            `;
+
+            statsList.innerHTML = itemStatsHtml + extraStatsHtml;
         }
 
         function startEditLog(index) {
@@ -390,6 +511,7 @@
         }
 
         initForm();
+        setupChartGestures();
         refreshAll();
     </script>
 </body>
