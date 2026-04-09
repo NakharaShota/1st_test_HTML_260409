@@ -101,6 +101,7 @@
         let chartZoom = 1;
         let chartZoomLimit = { min: 1, max: 2 };
         const pinchState = { active: false, startDistance: 0, startZoom: 1, centerX: 0, centerRatio: 1 };
+        let chartExpectedScrollWidth = 0;
         const config = {
             items: ["シャンプー", "水垢除去", "鉄粉除去", "ホイール清掃", "タイヤワックス", "ガラス撥水", "ガラス鱗取り", "隙間清掃", "車内清掃", "プロ施工"],
             chemicalTargets: ["シャンプー", "水垢除去", "鉄粉除去", "撥水コート", "ガラス撥水"]
@@ -121,10 +122,11 @@
             return candidates.find(step => step * dayWidth >= 56) || 120;
         }
 
-        function formatAxisLabel(date, stepDays) {
+        // 1月の目盛り、またはデータが複数年にまたがる場合は「年/月/日」表示
+        function formatAxisLabel(date, spansMultipleYears) {
             const m = date.getMonth() + 1;
             const d = date.getDate();
-            if (stepDays >= 60 || (m === 1 && d <= 7)) {
+            if (m === 1 || spansMultipleYears) {
                 return `${date.getFullYear()}/${m}/${d}`;
             }
             return `${m}/${d}`;
@@ -146,13 +148,12 @@
             return { startDate, endDate, totalDays, dataSpanDays };
         }
 
-        function updateZoomLimit(dataSpanDays) {
-            const defaultVisibleDays = 60;
-            const lowerByData = defaultVisibleDays / Math.max(1, dataSpanDays);
-            chartZoomLimit = {
-                min: Math.min(1, lowerByData),
-                max: defaultVisibleDays / 30
-            };
+        // データ変更時のみ呼び出す（renderChart内では呼ばない＝ズームが安定する）
+        function refreshZoomLimits(totalDays) {
+            // baseDayWidth = viewportWidth/60 なので minZoom = 60/totalDays
+            const minZoom = 60 / Math.max(1, totalDays);
+            const maxZoom = 2; // 1か月(30日)がデフォルト表示幅に収まる倍率
+            chartZoomLimit = { min: Math.min(1, minZoom), max: maxZoom };
             chartZoom = clamp(chartZoom, chartZoomLimit.min, chartZoomLimit.max);
         }
 
@@ -182,6 +183,11 @@
 
         function refreshAll() {
             updateChips();
+            const hist = getHistory();
+            if (hist.length > 0) {
+                const rangeInfo = getChartRangeInfo(hist);
+                refreshZoomLimits(rangeInfo.totalDays);
+            }
             renderChart();
             renderLogs();
             renderStats();
@@ -207,7 +213,7 @@
                 pinchState.startZoom = chartZoom;
 
                 pinchState.centerX = ((t1.clientX + t2.clientX) / 2) - rect.left;
-                const currentWidth = Math.max(1, container.scrollWidth);
+                const currentWidth = Math.max(1, chartExpectedScrollWidth || container.scrollWidth);
                 pinchState.centerRatio = (container.scrollLeft + pinchState.centerX) / currentWidth;
             }, { passive: false });
 
@@ -329,10 +335,11 @@
             const rangeInfo = getChartRangeInfo(history);
             const startDate = rangeInfo.startDate;
             const totalDays = rangeInfo.totalDays;
-            updateZoomLimit(rangeInfo.dataSpanDays);
+            const spansMultipleYears = rangeInfo.spansMultipleYears;
+            // ズーム範囲の更新はrefreshAll経由のみ（ここでは行わない）
             const viewportWidth = Math.max(240, chartContainer.clientWidth - 160);
             const baseDayWidth = viewportWidth / 60; // デフォルトで約2か月を表示
-            const dayWidth = Math.max(2, baseDayWidth * chartZoom);
+            const dayWidth = Math.max(0.5, baseDayWidth * chartZoom);
             const timelineWidth = totalDays * dayWidth;
             chartWrapper.style.width = (timelineWidth + 100) + 'px';
             const tickStepDays = getTickStepDays(dayWidth);
@@ -357,7 +364,7 @@
             for (let i = 0; i < totalDays; i += tickStepDays) {
                 const date = new Date(startDate.getTime());
                 date.setDate(date.getDate() + i);
-                const label = formatAxisLabel(date, tickStepDays);
+                const label = formatAxisLabel(date, spansMultipleYears);
                 const left = i * dayWidth;
                 html += `<span class="chart-axis-tick" style="left:${left}px;"></span>`;
                 html += `<span class="chart-axis-label" style="left:${left}px;">${label}</span>`;
@@ -365,8 +372,11 @@
             html += `</div></div>`;
 
             chartWrapper.innerHTML = html;
+            // DOM更新後にスクロール幅を確定値として保存（次回ピンチ開始時に使用）
+            void chartWrapper.offsetWidth;
+            chartExpectedScrollWidth = chartContainer.scrollWidth;
             if (option.keepPoint) {
-                const nextLeft = (option.keepPoint.ratio * chartContainer.scrollWidth) - option.keepPoint.centerX;
+                const nextLeft = option.keepPoint.ratio * chartExpectedScrollWidth - option.keepPoint.centerX;
                 chartContainer.scrollLeft = Math.max(0, nextLeft);
             } else {
                 chartContainer.scrollLeft = chartContainer.scrollWidth;
