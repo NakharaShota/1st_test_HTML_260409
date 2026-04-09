@@ -1,1 +1,236 @@
-てｓと
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>洗車ログ Pro v6</title>
+    <style>
+        :root { --primary: #0056b3; --bg: #f8f9fa; --text: #000; --accent: #d9534f; --chart-line: #dee2e6; }
+        body { font-family: -apple-system, sans-serif; margin: 0; padding: 15px; background: #fff; color: var(--text); line-height: 1.4; }
+        h2 { border-left: 5px solid var(--primary); padding-left: 10px; margin: 20px 0 10px; font-size: 1.1rem; }
+        .card { background: var(--bg); padding: 12px; border-radius: 10px; border: 1px solid #dee2e6; margin-bottom: 15px; }
+        
+        /* グラフエリア */
+        .chart-container { overflow-x: auto; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 10px; margin-bottom: 15px; -webkit-overflow-scrolling: touch; }
+        .chart-wrapper { position: relative; }
+        .chart-row { display: flex; align-items: center; border-bottom: 1px solid var(--chart-line); height: 35px; }
+        .chart-label { width: 90px; font-size: 0.65rem; font-weight: bold; position: sticky; left: 0; background: #fff; z-index: 10; border-right: 1px solid #ddd; }
+        .chart-timeline { flex-grow: 1; position: relative; height: 100%; }
+        .chart-marker { position: absolute; width: 10px; height: 10px; background: var(--primary); border-radius: 50%; top: 50%; transform: translate(-50%, -50%); border: 1.5px solid #fff; }
+
+        /* 入力フォーム */
+        .input-group { margin-bottom: 12px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.85rem; }
+        input[type="text"], input[type="date"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
+        textarea { height: 60px; resize: none; font-size: 0.9rem; }
+        
+        /* ケミカル選択のチップ */
+        .chemical-input-area { margin-top: 5px; padding-left: 34px; display: none; }
+        .chemical-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+        .chip { background: #e9ecef; border-radius: 15px; padding: 4px 10px; font-size: 0.7rem; cursor: pointer; border: 1px solid #ced4da; }
+        .chip:active { background: #dee2e6; }
+
+        .checkbox-group { display: flex; flex-direction: column; gap: 8px; }
+        .checkbox-item { display: flex; flex-direction: column; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+        .check-row { display: flex; align-items: center; font-size: 0.95rem; }
+        .check-row input { width: 22px; height: 22px; margin-right: 12px; }
+
+        button { width: 100%; padding: 14px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: bold; margin-bottom: 8px; }
+        .btn-small { width: auto; padding: 5px 10px; font-size: 0.75rem; background: #6c757d; display: inline-block; }
+        
+        .log-item { border-bottom: 1px solid #eee; padding: 10px 0; }
+        .log-date { font-weight: bold; color: var(--primary); font-size: 0.9rem; }
+        .log-memo { font-size: 0.8rem; background: #fff9db; padding: 5px; border-radius: 4px; margin-top: 4px; border: 1px solid #ffec99; }
+    </style>
+</head>
+<body>
+
+    <h2>📈 タイムライン</h2>
+    <div class="chart-container" id="chartContainer">
+        <div id="timelineChart" class="chart-wrapper"></div>
+    </div>
+
+    <h2>🚿 記録</h2>
+    <div class="card">
+        <div class="input-group">
+            <label>日付</label>
+            <input type="date" id="date">
+        </div>
+        <div class="input-group">
+            <label>場所</label>
+            <input type="text" id="location" list="location-list" placeholder="例：自宅、GS" oninput="checkAutoFill(this.value)">
+            <datalist id="location-list"><option value="自宅"><option value="GS(洗車機)"><option value="キーパーラボ"></datalist>
+        </div>
+        
+        <label>メンテナンス項目</label>
+        <div class="checkbox-group" id="menuGroup">
+            </div>
+
+        <div class="input-group" style="margin-top:15px;">
+            <label>メモ (100文字以内)</label>
+            <textarea id="memo" maxlength="100" placeholder="例：気温高め、ヒンジ清掃予定など"></textarea>
+        </div>
+        
+        <button onclick="saveLog()">保存</button>
+    </div>
+
+    <div style="display:flex; gap:10px; margin-bottom: 20px;">
+        <button class="btn-small" onclick="exportData()">データ保存</button>
+        <button class="btn-small" onclick="importData()" style="background:#495057;">データ復元</button>
+    </div>
+
+    <h2>📜 直近の履歴</h2>
+    <div id="logList"></div>
+
+    <script>
+        document.getElementById('date').valueAsDate = new Date();
+        const config = {
+            items: ["シャンプー", "水垢除去", "鉄粉除去", "ホイール清掃", "タイヤワックス", "ガラス撥水", "ガラス鱗取り", "隙間清掃", "車内清掃", "プロ施工"],
+            chemicalTargets: ["シャンプー", "水垢除去", "鉄粉除去", "撥水コート", "ガラス撥水"]
+        };
+
+        // フォーム生成
+        function initForm() {
+            const container = document.getElementById('menuGroup');
+            container.innerHTML = config.items.map(item => `
+                <div class="checkbox-item">
+                    <div class="check-row">
+                        <input type="checkbox" id="check-${item}" value="${item}" onchange="toggleChem('${item}')">
+                        <label for="check-${item}">${item}</label>
+                    </div>
+                    ${config.chemicalTargets.includes(item) ? `
+                    <div class="chemical-input-area" id="chem-area-${item}">
+                        <input type="text" id="input-chem-${item}" placeholder="ケミカル名/洗車機など">
+                        <div class="chemical-chips" id="chips-${item}"></div>
+                    </div>` : ''}
+                </div>
+            `).join('');
+            updateChips();
+        }
+
+        function toggleChem(item) {
+            const area = document.getElementById(`chem-area-${item}`);
+            if (area) area.style.display = document.getElementById(`check-${item}`).checked ? 'block' : 'none';
+        }
+
+        // 場所に「GS」が入ったら自動でシャンプーを洗車機に
+        function checkAutoFill(val) {
+            if (val.includes("GS") || val.includes("洗車機")) {
+                const checkShampoo = document.getElementById('check-シャンプー');
+                if (checkShampoo) {
+                    checkShampoo.checked = true;
+                    toggleChem('シャンプー');
+                    document.getElementById('input-chem-シャンプー').value = "洗車機";
+                }
+            }
+        }
+
+        // 過去のケミカル履歴からチップを作成
+        function updateChips() {
+            const history = JSON.parse(localStorage.getItem('carWashLogs') || '[]');
+            config.chemicalTargets.forEach(item => {
+                const chipsContainer = document.getElementById(`chips-${item}`);
+                if (!chipsContainer) return;
+                
+                // 過去に使用したケミカルのリスト
+                const pastChems = [...new Set(history.flatMap(log => 
+                    log.details ? log.details.filter(d => d.name <http://d.name>  === item).map(d => d.chem) : []
+                ))].filter(Boolean).slice(0, 5);
+
+                chipsContainer.innerHTML = pastChems.map(c => `
+                    <div class="chip" onclick="document.getElementById('input-chem-${item}').value='${c}'">${c}</div>
+                `).join('');
+            });
+        }
+
+        function saveLog() {
+            const menus = Array.from(document.querySelectorAll('input[type="checkbox"]:checked')).map(el => {
+                const item = el.value;
+                const chemInput = document.getElementById(`input-chem-${item}`);
+                return { name: item, chem: chemInput ? chemInput.value : "" };
+            });
+
+            if (menus.length === 0) return alert("内容を選択してください");
+
+            const log = {
+                date: document.getElementById('date').value,
+                location: document.getElementById('location').value || "未記入",
+                details: menus,
+                memo: document.getElementById('memo').value
+            };
+
+            let history = JSON.parse(localStorage.getItem('carWashLogs') || '[]');
+            history.unshift(log);
+            history.sort((a, b) => new Date(b.date) - new Date(a.date));
+            localStorage.setItem('carWashLogs', JSON.stringify(history));
+
+            alert("保存しました");
+            location.reload(); // 簡易リフレッシュ
+        }
+
+        function renderChart() {
+            const history = JSON.parse(localStorage.getItem('carWashLogs') || '[]');
+            const chartWrapper = document.getElementById('timelineChart');
+            if (history.length === 0) return;
+
+            const dates = history.map(h => new Date(h.date));
+            const minDate = new Date(Math.min(...dates));
+            const startDate = new Date(minDate); startDate.setDate(startDate.getDate() - 7);
+            const totalDays = Math.ceil((new Date() - startDate) / (1000 * 60 * 60 * 24)) + 1;
+            const dayWidth = totalDays > 365 ? 4 : 8;
+            const timelineWidth = totalDays * dayWidth;
+            chartWrapper.style.width = (timelineWidth + 100) + 'px';
+
+            let html = '';
+            config.items.forEach(item => {
+                html += `<div class="chart-row"><div class="chart-label">${item}</div><div class="chart-timeline" style="width:${timelineWidth}px;">`;
+                history.filter(log => log.details.some(d => d.name <http://d.name>  === item)).forEach(log => {
+                    const pos = (new Date(log.date) - startDate) / (1000 * 60 * 60 * 24) * dayWidth;
+                    html += `<div class="chart-marker" style="left:${pos}px;"></div>`;
+                });
+                html += `</div></div>`;
+            });
+            chartWrapper.innerHTML = html;
+            setTimeout(() => { document.getElementById('chartContainer').scrollLeft = 99999; }, 200);
+        }
+
+        function renderLogs() {
+            const history = JSON.parse(localStorage.getItem('carWashLogs') || '[]');
+            document.getElementById('logList').innerHTML = history.slice(0, 10).map(item => `
+                <div class="log-item">
+                    <span class="log-date">${item.date}</span> @${item.location}<br>
+                    <small style="color:#444;">${item.details.map(d => d.name <http://d.name>  + (d.chem ? `(${d.chem})` : "")).join(' / ')}</small>
+                    ${item.memo ? `<div class="log-memo">📝 ${item.memo}</div>` : ''}
+                </div>
+            `).join('');
+        }
+
+        function exportData() {
+            const blob = new Blob([localStorage.getItem('carWashLogs')], {type: 'application/json'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `wash_log_${new Date().toISOString().slice(0,10)}.json`;
+            a.click();
+        }
+
+        function importData() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.onchange = e => {
+                const reader = new FileReader();
+                reader.onload = event => {
+                    localStorage.setItem('carWashLogs', event.target.result);
+                    location.reload();
+                };
+                reader.readAsText(e.target.files[0]);
+            };
+            input.click();
+        }
+
+        initForm();
+        renderChart();
+        renderLogs();
+    </script>
+</body>
+</html>
+
